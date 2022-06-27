@@ -1,3 +1,4 @@
+python3 srv.py 10001 &
 python3 srv.py 10002 &
 python3 srv.py 10003 &
 python3 srv.py 10004 &
@@ -7,4 +8,3 @@ python3 srv.py 10007 &
 python3 srv.py 10008 &
 python3 srv.py 10009 &
 python3 srv.py 10010 &
-python3 srv.py 10001 &

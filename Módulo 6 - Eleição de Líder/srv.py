@@ -5,41 +5,115 @@ import rpyc  # modulo que oferece suporte a abstracao de RPC
 import sys
 
 # servidor que dispara um processo filho a cada conexao
-from rpyc.utils.server import OneShotServer
+from rpyc.utils.server import ThreadedServer
 
+HOST = "localhost"
+porta = 0
 
 # classe que implementa o servico de echo
 class Echo(rpyc.Service):
+    mapa = {
+        10001: {
+            "nome": "a",
+            "valor": 4,
+            "vizinhos": ["a", "j"]
+        },
+        10002: {
+            "nome": "b",
+            "valor": 6,
+            "vizinhos": ["a", "c", "g"]
+        },
+        10003: {
+            "nome": "c",
+            "valor": 3,
+            "vizinhos": ["b", "d", "e"]
+        },
+        10004: {
+            "nome": "d",
+            "valor": 2,
+            "vizinhos": ["c", "e", "f"]
+        },
+        10005: {
+            "nome": "e",
+            "valor": 1,
+            "vizinhos": ["c", "d", "f", "g"]
+        },
+        10006: {
+            "nome": "f",
+            "valor": 4,
+            "vizinhos": ["d", "e", "i"]
+        },
+        10007: {
+            "nome": "g",
+            "valor": 2,
+            "vizinhos": ["b", "e", "h", "j"]
+        },
+        10008: {
+            "nome": "h",
+            "valor": 8,
+            "vizinhos": ["g", "i"]
+        },
+        10009: {
+            "nome": "i",
+            "valor": 5,
+            "vizinhos": ["f", "h"]
+        },
+        10010: {
+            "nome": "j",
+            "valor": 4,
+            "vizinhos": ["a", "g"]
+        }
+    }
+
+    portaPorNome = {
+        "a": 10001,
+        "b": 10002,
+        "c": 10003,
+        "d": 10004,
+        "e": 10005,
+        "f": 10006,
+        "g": 10007,
+        "h": 10008,
+        "i": 10009,
+        "j": 10010,
+    }
+
+    qtdAcks = 0
+    qtdEcho = 0
+
     def __init__(self):
-        self.nome = None
-        self.valor = None
+        print("Servidor iniciado. Porta: ", porta)
+        self.nome = self.mapa[porta]["nome"]
+        self.valor = self.mapa[porta]["valor"]
+        self.maiorEncontrado = {"nome": self.nome, "valor": self.valor}
+        self.vizinhos = []
         self.conexoes = {}
         self.lider = None
         self.pai = None
-        self.msg = None
+        self.eleicao = False
+        self.valoresVizinhos = []
+
+        for nome in self.mapa[porta]["vizinhos"]:
+            self.vizinhos.append(self.portaPorNome[nome])
+
+        for portaVizinho in self.vizinhos:
+            if not self.conexoes[portaVizinho]:
+                self.conexoes[portaVizinho] = rpyc.connect(HOST, portaVizinho)
+
+        if porta == self.portaPorNome["a"]:
+            self.exposed_inicia_eleicao()
+            print(self.maiorEncontrado)
+
 
     # executa quando uma conexao eh criada
     def on_connect(self, conn):
-        pass
+        nomeConexao = conn.root.get_nome()
+        print("Conexão recebida de:", nomeConexao)
+        self.conexoes[self.portaPorNome[nomeConexao]] = conn
 
     # executa quando uma conexao eh fechada
-
     def on_disconnect(self, conn):
-        if self.conexoes[conn] == self.pai:
-            self.pai = None
-
-        self.conexoes.pop(conn)
-        print("Conexao finalizada:")
-
-    # imprime e ecoa a mensagem recebida
-    def exposed_echo(self, msg):
-        print(msg)
-        return msg
-
-    def exposed_set_server(self, nome=-1, valor=-1):
-        self.nome = nome
-        self.valor = valor
-        print("Servidor setado", self.nome, self.valor)
+        print("Conexao finalizada")
 
     def exposed_get_valor(self):
         return self.valor
@@ -47,78 +121,53 @@ class Echo(rpyc.Service):
     def exposed_get_nome(self):
         return self.nome
 
-    def exposed_election(self, nome, valor):
-        lider_provisorio = {"nome": self.nome, "valor": self.valor}
+    def exposed_ack(self, nome, valor, conn):
+        print(self.nome, ": recebi ack de", self.pai)
+        self.qtdAcks += 1
 
-        if self.pai == None:
-            self.pai = (nome, valor)
-        else:
-            return "ack"
+        if (self.qtdAcks + self.qtdEcho + 1 == len(self.conexoes)):
+            print(self.nome, ": mandei echo no ack para", self.pai)
+            rpyc.async_(self.conexoes[self.portaPorNome[self.pai]].root.echo)(self.maiorEncontrado)
 
-        print("Explorando", nome)
-        print("conexões de ", self.nome, self.conexoes.values())
+    def exposed_echo(self, maiorRecebido):
+        self.qtdEcho += 1
 
-        for (conn, info) in self.conexoes.items():
-            if info == self.pai:
-                continue
+        if maiorRecebido["valor"] > self.maiorEncontrado["valor"]:
+            self.maiorEncontrado["valor"] = self.maiorRecebido["valor"]
+            self.maiorEncontrado["nome"] = self.maiorRecebido["nome"]
 
-            resposta = conn.root.election(info[0], info[1])
+        if (self.qtdAcks + self.qtdEcho + 1 == len(self.conexoes)):
+            print(self.nome, ": mandei echo no echo para", self.pai)
+            rpyc.async_(self.conexoes[self.portaPorNome[self.pai]].root.echo)(self.maiorEncontrado)
 
-            if resposta == "ack":
-                continue
+    def exposed_probe(self, nome, conn):
+        print(self.nome, ": recebi probe de ", nome)
+        if not self.eleicao:
+            print(self.nome, ": mandei ack para ", nome)
+            rpyc.async_(conn.root.ack)(self.nome, self.valor, conn)
+            return
+        
+        if not self.pai:
+            self.pai = nome
+        
+        self.eleicao = True
 
-            if (resposta["valor"] is None or lider_provisorio["valor"] is None):
-                print("\n\n\n\nErro none", resposta["valor"],
-                      lider_provisorio["valor"], "\n\n\n\n")
+        for vizinho in self.mapa[porta]["vizinhos"]:
+            if vizinho != self.pai:
+                print(self.nome, ": mandei probe para ", vizinho)
+                rpyc.async_(self.conexoes[self.portaPorNome[vizinho]].root.probe)()
 
-            if resposta["valor"] > lider_provisorio["valor"]:
-                print(self.nome, ": Achei um maior!!",
-                      resposta["nome"], resposta["valor"])
-                lider_provisorio["valor"] = resposta["valor"]
-                lider_provisorio["nome"] = resposta["nome"]
-
-        return lider_provisorio
+        if (len(self.conexoes) == 1):
+            print(self.nome, ": mandei echo no probe para", self.pai)
+            rpyc.async_(self.conexoes[self.portaPorNome[self.pai]].root.echo)(self.maiorEncontrado)
 
     def exposed_inicia_eleicao(self):
-        lider = self.exposed_election(self.nome, self.valor)
+        self.eleicao = True
 
-        self.inicia_broadcast(lider)
-
-        return lider
-
-    def exposed_broadcast(self, msg):
-        for conn in self.conexoes:
-            if self.msg == msg:
-                continue
-
-            conn.root.broadcast(msg)
-
-    def exposed_get_conn(self, nome, valor):
-        for key, value in self.conexoes.items():
-            if value == (nome, valor):
-                return key
-        return None
-
-    def inicia_broadcast(self, msg):
-        self.msg = msg
-        self.exposed_broadcast(msg)
-
-    def exposed_conecta(self, endereco, porta):
-        conn = rpyc.connect(endereco, porta)
-        conexao = conn.root.get_conn(self.nome, self.valor)
-
-        nome_conexao = conn.root.get_nome()
-        valor_conexao = conn.root.get_valor()
-
-        if not conexao:
-            self.conexoes[conn] = (nome_conexao, valor_conexao)
-        else:
-            self.conexoes[conexao] = (nome_conexao, valor_conexao)
-
-        print(self.nome, ": Conectei com", porta,
-              (nome_conexao, valor_conexao))
+        for vizinho in self.mapa[porta]["vizinhos"]:
+            print(self.nome, ": mandei probe para ", vizinho)
+            rpyc.async_(self.conexoes[self.portaPorNome[vizinho]].root.probe)()
 
 
-# dispara o servidor
-if __name__ == "__main__":
-    OneShotServer(Echo, port=int(sys.argv[1])).start()
+porta = int(sys.argv[1])
+ThreadedServer(Echo, port=int(sys.argv[1])).start()
