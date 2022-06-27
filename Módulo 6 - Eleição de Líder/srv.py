@@ -60,7 +60,7 @@ mapa = {
     },
     10010: {
         "nome": "j",
-        "valor": 10,
+        "valor": 4,
         "vizinhos": ["a", "g"]
     }
 }
