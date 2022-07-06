@@ -1,12 +1,7 @@
-#servidor de echo: lado servidor
-#com finalizacao do lado do servidor
-from glob import glob
-from re import X
 import socket
 import select
 import sys
 import json
-import os
 
 # define a localizacao do servidor
 HOST = '' # vazio indica que podera receber requisicoes a partir de qq interface de rede da maquina
@@ -260,7 +255,6 @@ def main():
         #espera por qualquer entrada de interesse
         print("\n\nDigite um comando:\n")
         leitura, escrita, excecao = select.select(entradas, [], [])
-        #os.system('cls' if os.name == 'nt' else 'clear')
         
         #tratar todas as entradas prontas
         for pronto in leitura:
