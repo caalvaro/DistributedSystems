@@ -107,7 +107,7 @@ def atendeRequisicoes(clisock):
     '''Recebe mensagens e as envia de volta para o cliente (ate o cliente finalizar)
     Entrada: socket da conexao e endereco do cliente
     Saida: '''
-    global X, historico, copiaPrimaria
+    global X, historico, copiaPrimaria, meuID
 
     print("Nova mensagem recebida.")
 
@@ -119,9 +119,26 @@ def atendeRequisicoes(clisock):
         print("Novo valor de X:", X)
         historico.append((copiaPrimaria["id"], X))
     elif mensagem["operacao"] == "pedeCopia": # mensagem que pede autorização de alteração. Move a cópia primária para lá
-        print("Nova copia primaria:", copiaPrimaria)
-        copiaPrimaria["id"] = mensagem["id"]
-        copiaPrimaria["porta"] = mensagem["porta"]
+        if copiaPrimaria["id"] != meuID:
+            resposta = {
+                "operacao": "erro",
+                "copiaPrimaria": copiaPrimaria
+            }
+            enviaMensagem(resposta, clisock)
+        else:
+            resposta = {
+                "operacao": "ok",
+            }
+            enviaMensagem(resposta, clisock)
+
+            print("Nova copia primaria:", copiaPrimaria)
+            copiaPrimaria["id"] = mensagem["id"]
+            copiaPrimaria["porta"] = mensagem["porta"]
+    # recebe autorização da cópia primária para se tornar a cópia primária
+    elif mensagem["operacao"] == "ok":
+        fazCopiaLocal()
+    elif mensagem["operacao"] == "erro": # recebe erro da cópia primária, impedindo de se tornar a cópia primária
+        print("Alteração não disponível. Tente novamente.")
     else:
         print("mensagem não reconhecida")
 
@@ -142,7 +159,7 @@ def conectaOutrasReplicas():
             conexoes[id] = sock
             entradas.append(sock)
             enviaMensagem({"operacao": "conecta", "id": meuID}, conexoes[id])
-                
+
 
 def avisaMudanca():
     '''Avisa que o valor de X foi alterado pela cópia primaria'''
@@ -164,12 +181,23 @@ def avisaMudanca():
 def imprimeHistorico():
     '''Imprime a cópia local do histórico de alterações'''
     global historico
-    print(historico)
+    print("Histórico:\n", historico)
 
 
-def fazCopiaLocal():
+def leValorX():
+    '''Lê cópia local de X'''
+    global X
+    print("Valor de X:", X)
+
+
+def pedeCopiaLocal():
     '''Envia uma mensagem para a cópia primária avisando que quer fazer alteração'''
     global copiaPrimaria, meuID, PORT, copiaPrimaria, X
+
+    # se já é a cópia primária, pode fazer a alteração de X normalmente
+    if copiaPrimaria["id"] == meuID:
+        alteraValorX()
+        return
 
     sockCopiaPrimaria = conexoes[copiaPrimaria["id"]]
 
@@ -179,33 +207,27 @@ def fazCopiaLocal():
         "porta": PORT
     }
 
+    # apenas faz uma requisição pra ser a cópia primária
     enviaMensagem(mensagem, sockCopiaPrimaria)
-    print("enviei mensagem")
+    print("Requisição enviada. Aguarde resposta para alterar o X.")
 
+
+def fazCopiaLocal():
+    '''se tiver permissão, tornasse cópia primária e faz a alteração'''
     copiaPrimaria["id"] = meuID
     copiaPrimaria["porta"] = PORT
 
     print("agora sou a primaria")
 
-
-def leValorX():
-    '''Lê cópia local de X'''
-    global X
-    print("Valor de X:", X)
+    alteraValorX()
 
 
 def alteraValorX():
-    '''Altera cópia local de X
-    Se não for a cópia primária, faz o pedido
-    envia a última alteração para todas as réplicas'''
+    '''Loop para fazer todas as alterações que quiser em X
+    Ao final, avisa a todas as réplicas da nova mudança'''
     global X, copiaPrimaria, meuID, historico
 
     while True:
-        if copiaPrimaria["id"] != meuID:
-            # pede a copia primária se não for ainda
-            # bloqueante
-            fazCopiaLocal()
-
         novoX = input("Digite novo valor de X ('fim' para sair): ")
         if novoX == "fim":
             break
@@ -225,25 +247,26 @@ def main():
 
     meuID = int(input("Digite o ID da réplica: "))
     sock = iniciaServidor(meuID)
-    
-    while True:
-        #espera por qualquer entrada de interesse
-        leitura, escrita, excecao = select.select(entradas, [], [])
-        os.system('cls' if os.name == 'nt' else 'clear')
-        print('''Comandos disponíveis:
+
+    print('''\n\nComandos disponíveis:
          'conecta': faz a conexão com outras réplicas
          'conexoes': imprime todas as conexões disponíveis
          'copiaPrimaria': imprime quem é a copia primaria atualmente
          'historico': imprime o historico de alterações
          'ler': lê o valor atual de X
-         'alterar': altera o valor de X
-         
-         Digite um comando:''')
+         'alterar': altera o valor de X''')
+    
+    while True:
+        #espera por qualquer entrada de interesse
+        print("\n\nDigite um comando:\n")
+        leitura, escrita, excecao = select.select(entradas, [], [])
+        #os.system('cls' if os.name == 'nt' else 'clear')
+        
         #tratar todas as entradas prontas
         for pronto in leitura:
             if pronto == sock:  #pedido novo de conexao
                 clisock, id = aceitaConexao(sock)
-                print ('Conectado com: ', id)
+                print('Conectado com: ', id)
             elif pronto == sys.stdin: #entrada padrao
                 cmd = input()
                 if cmd == 'fim': #solicitacao de finalizacao do servidor
@@ -255,8 +278,8 @@ def main():
                     leValorX()
                 elif cmd == 'historico': #imprime o historico de alterações
                     imprimeHistorico()
-                elif cmd == 'alterar': #altera o valor de X
-                    alteraValorX()
+                elif cmd == 'alterar': #pede para ser copia primária e altera X
+                    pedeCopiaLocal()
                 elif cmd == 'conexoes': #imprime todas as conexoes
                     print(conexoes)
                 elif cmd == 'copiaPrimaria': #imprime quem é a copia primaria
